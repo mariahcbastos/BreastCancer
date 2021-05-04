@@ -1,0 +1,149 @@
+---
+title: "Data Visualization Final Project"
+author: "Mariah Bastos"
+date: "4/29/2021"
+output:
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install required packages
+```{r}
+#install.packages("tidyverse")
+#install.packages("caret")
+#install.packages("h2o")
+#install.packages("randomForest")
+#install.packages("neuralnet")
+#install.packages("e1071")
+#install.packages("caTools")
+#install.packages("lubridate")
+#install.packages("dplyr")
+#install.packages("magrittr")
+#install.packages("ggpubr")
+```
+
+## Load packages
+```{r}
+library(h2o)
+library(randomForest)
+library(magrittr) 
+require(caTools)
+require(neuralnet)
+library("e1071")
+library(tidyverse)
+library(caTools)
+library(dplyr)
+library(ggpubr)
+attach(iris)
+h2o.init()
+```
+
+## Load and select the data
+```{r}
+#Load CSV with header
+breastCancerData = read.csv('breastcancer.csv',header = TRUE)
+
+#data - Column of diagnosis as factor.
+breastCancerData <- transform(breastCancerData,
+                              diagnosis=as.factor(diagnosis))
+summary(breastCancerData)
+```
+
+## Prepare Data
+```{r}
+#exclude id and X columns they are not useful id is a identifier and X is always NA
+breastCancerDataRF = subset(breastCancerData, select =-c(id,X))
+sample = sample.split(breastCancerDataRF$diagnosis, SplitRatio = .75)
+
+#Sample used to generate the train the Random Forest
+train = subset(breastCancerDataRF, sample == TRUE)
+
+#Sample used to generate the test the Random Forest
+test  = subset(breastCancerDataRF, sample == FALSE)
+```
+
+## Random Forest
+```{r}
+#Generate Random Forest
+rf <- randomForest(diagnosis ~ ., data=train)
+
+#Used the Random Forest to predict
+predrf = predict(rf, newdata=test[-1])
+
+#ConfusionMatrix to verify if the prediction was correct
+caret::confusionMatrix(test[,1] , predrf)
+```
+## Neural Network
+```{r}
+nn=neuralnet(diagnosis ~ . , data = train, hidden=3, linear.output = FALSE)
+plot(nn)
+prednn = neuralnet::compute(nn,test[-1])
+prob <- prednn$net.result[,1]
+prnn <- ifelse(prob<0.5, "M", "B")
+nnaccuracy <- prnn == test$diagnosis
+caret::confusionMatrix(as.factor(prnn) , test$diagnosis)
+```
+
+## Support vector machine
+```{r}
+svm = svm(diagnosis ~ ., data = train)
+summary(svm)
+predsvm <- predict(svm, test[-1])
+csvm = table(predsvm, test[,1])
+svmaccuracy <- predsvm == test$diagnosis
+caret::confusionMatrix(predsvm, test$diagnosis)
+```
+
+
+## Deep Learning
+```{r}
+#Force use JAVA 1.8. H20 is not compatible with JAVA 15
+#Sys.setenv(JAVA_HOME= "/Library/Java/JavaVirtualMachines/jdk1.8.0_281.jdk/Contents/Home")
+#h2o.init()
+
+df = h2o.importFile(path = 'breastcancer.csv')
+h2o.isfactor(df["diagnosis"])
+splits <- h2o.splitFrame(df, c(0.6,0.2), seed=1234)
+train_h2o  <- h2o.assign(splits[[1]], "train.hex") # 60%
+valid_h2o  <- h2o.assign(splits[[2]], "valid.hex") # 20%
+test_h20   <- h2o.assign(splits[[3]], "test.hex")  # 20%
+response <- "diagnosis"
+predictors <- setdiff(names(df), response)
+m1 <- h2o.deeplearning(
+  model_id="dl_model_first", 
+  training_frame=train_h2o, 
+  validation_frame=valid_h2o,   ## validation dataset: used for scoring and early stopping
+  x=predictors,
+  y=response,
+  #activation="Rectifier",  ## default
+  #hidden=c(200,200),       ## default: 2 hidden layers with 200 neurons each
+  epochs=1,
+  variable_importances=T    ## not enabled by default
+)
+summary(m1)
+pred <- h2o.predict(m1,test_h20)
+dlAccuracy<- pred$predict == test_h20$diagnosis
+confusionMatrix(factor(as.vector(pred$predict)),factor(as.vector(test_h20$diagnosis)))
+```
+
+## Presurre
+```{r}
+
+aml = h2o.automl(x = predictors, y = response,
+           training_frame = train_h2o,
+           max_models = 20,
+           seed = 123,
+           max_runtime_secs = 30
+           )
+
+# AutoML Leaderboard
+lb = aml@leaderboard
+lb
+
+# prediction result on test data
+predictionAutoML = h2o.predict(aml@leader, test_h20[-2]) 
+mlaccuracy <- predictionAutoML$predict == test_h20$diagnosis
+confusionMatrix(factor(as.vector(predictionAutoML$predict)),factor(as.vector(test_h20$diagnosis)))
+```
